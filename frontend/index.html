@@ -6,12 +6,12 @@
 <title>日切放行</title>
 <script src="/static/vue.global.prod.js"></script>
 <style>
-  :root{--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#93a0b8;--ok:#3ddc97;--bad:#ff6b6b;--accent:#4cc9f0}
+  :root{--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#93a0b8;--ok:#3ddc97;--bad:#ff6b6b;--warn:#f5b942;--accent:#4cc9f0}
   *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
   .top{display:flex;align-items:center;gap:18px;padding:14px 20px;border-bottom:1px solid var(--line);background:#0e1626}
   .brand{font-weight:700;letter-spacing:.08em;font-size:18px}
   .brand small{display:block;color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.02em;margin-top:2px}
-  .tabs{display:flex;gap:6px;flex:1}
+  .tabs{display:flex;gap:6px;flex:1;flex-wrap:wrap}
   .tabs button{background:transparent;border:1px solid transparent;color:var(--muted);padding:8px 12px;border-radius:999px;cursor:pointer}
   .tabs button.on{color:var(--text);border-color:var(--line);background:#18233a}
   .user{color:var(--muted);font-size:13px}
@@ -20,19 +20,32 @@
   .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
   h2{margin:0 0 10px;font-size:15px;color:#c9d4ea}
+  h3{margin:14px 0 8px;font-size:13px;color:#c9d4ea}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   th{color:var(--muted);font-weight:600}
   input,select{width:100%;background:#0b1220;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;margin:4px 0 10px}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
   .primary{background:var(--accent);color:#041018;border:0;padding:9px 12px;border-radius:8px;font-weight:700;cursor:pointer}
   .mono{font-family:Consolas,"Courier New",monospace}
   .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#1b2a22;color:var(--ok)}
   .tag.bad{background:#2a1518;color:var(--bad)}
+  .tag.warn{background:#2b2412;color:var(--warn)}
+  .tag.mute{background:#1a2233;color:var(--muted)}
   .login{max-width:400px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
   .err{color:var(--bad);min-height:18px;font-size:13px}
-  .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
   .kpi .panel{padding:12px}.kpi b{display:block;font-size:22px;margin-top:4px}
+  .hint{color:var(--muted);font-size:12px;line-height:1.6}
+  .note{color:var(--muted);font-size:12px;margin-top:6px}
+  .gate{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .gate .pill{border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--muted)}
+  .gate .pill b{color:var(--text)}
+  .events{max-height:260px;overflow:auto}
+  .events td{font-size:12px}
+  .bad-text{color:var(--bad)}.ok-text{color:var(--ok)}.warn-text{color:var(--warn)}
+  .clickable{cursor:pointer}
 </style>
 </head>
 <body>
@@ -55,12 +68,16 @@ createApp({
     const token=ref(localStorage.getItem('slicegate_token')||'');
     const user=ref(localStorage.getItem('slicegate_user')||'');
     const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref('');
-    const slices=ref([]), releases=ref([]), watermarks=ref([]);
+    const slices=ref([]), releases=ref([]), watermarks=ref([]), groups=ref([]), register=ref({policies:[],events:[],canonical_rubric:''});
     const form=ref({slice_no:'SL-2026-11-03-east',biz_date:'2026-11-03',partition_key:'east',row_count:1000,expected_count:1000});
+    const groupForm=ref({biz_date:'2026-11-03',group_key:'东区日切组',partitions:'east,west'});
     const releaseSliceId=ref(1), consumer=ref('ads_order');
-    const nav=['切片登记','完整度裁决','下游放行','消费水位'];
+    const detail=ref(null), detailKey=ref(''), detailErr=ref('');
+    const nav=['切片登记','完整度裁决','下游放行','依赖目录','分区详情','消费水位','依赖闸口册'];
     const completeCnt=computed(()=>slices.value.filter(s=>s.completeness==='完整').length);
     const openCnt=computed(()=>slices.value.filter(s=>s.release_status!=='已放行').length);
+    const badWmCnt=computed(()=>watermarks.value.filter(w=>w.gate_ok===false).length);
+    const groupCnt=computed(()=>groups.value.length);
     function auth(){return {Authorization:'Bearer '+token.value,'Content-Type':'application/json'};}
     async function login(){
       err.value='';
@@ -85,13 +102,41 @@ createApp({
       releases.value=Array.isArray(rel.items)?rel.items:[];
       const w=await loadJson('/api/watermarks'); if(w===null) return;
       watermarks.value=Array.isArray(w.items)?w.items:[];
+      const g=await loadJson('/api/dependencies'); if(g===null) return;
+      groups.value=Array.isArray(g.items)?g.items:[];
+      const reg=await loadJson('/api/dependencies/register'); if(reg===null) return;
+      register.value={policies:reg.policies||[],events:reg.events||[],canonical_rubric:reg.canonical_rubric||''};
       if(slices.value.length) releaseSliceId.value=slices.value[0].id;
+      if(detailKey.value) await openDetail(detailKey.value.split('/')[0],detailKey.value.split('/')[1],true);
     }
     async function createSlice(){actionErr.value='';const r=await fetch('/api/slices',{method:'POST',headers:auth(),body:JSON.stringify(form.value)});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'失败';await refresh();}
     async function evaluate(id){await fetch('/api/slices/'+id+'/evaluate',{method:'POST',headers:auth()});await refresh();}
-    async function doRelease(){actionErr.value='';const r=await fetch('/api/slices/'+releaseSliceId.value+'/release',{method:'POST',headers:auth(),body:JSON.stringify({consumer:consumer.value})});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'放行失败';await refresh();}
+    async function doRelease(){actionErr.value='';const r=await fetch('/api/slices/'+releaseSliceId.value+'/release',{method:'POST',headers:auth(),body:JSON.stringify({consumer:consumer.value})});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'放行失败';else actionErr.value=j.hint||'放行完成';await refresh();}
+    async function declareGroup(){
+      actionErr.value='';
+      const parts=groupForm.value.partitions.split(',').map(x=>x.trim()).filter(Boolean);
+      const r=await fetch('/api/dependencies/groups',{method:'POST',headers:auth(),body:JSON.stringify({biz_date:groupForm.value.biz_date,group_key:groupForm.value.group_key,partitions:parts})});
+      const j=await r.json(); if(!r.ok) actionErr.value=j.detail||'声明失败';
+      await refresh();
+    }
+    async function openDetail(biz, part, silent){
+      detailErr.value=''; detailKey.value=biz+'/'+part;
+      const j=await loadJson('/api/partitions/'+encodeURIComponent(biz)+'/'+encodeURIComponent(part));
+      if(j===null) return;
+      if(j.detail){ detailErr.value=j.detail; detail.value=null; return; }
+      detail.value=j; if(!silent) tab.value=4;
+    }
+    function tagClass(text){
+      if(!text) return 'mute';
+      if(text.indexOf('越界')>=0||text.indexOf('依赖口径偏了')>=0) return 'bad';
+      if(text==='组未齐'||text==='待全组放行'||text==='待推水位') return 'warn';
+      if(text==='已放行'||text==='水位已推') return '';
+      return 'mute';
+    }
     onMounted(()=>{if(token.value)refresh();});
-    return {token,user,username,password,err,tab,nav,slices,releases,watermarks,form,releaseSliceId,consumer,actionErr,completeCnt,openCnt,login,logout,createSlice,evaluate,doRelease};
+    return {token,user,username,password,err,tab,nav,slices,releases,watermarks,groups,register,form,groupForm,releaseSliceId,consumer,
+            completeCnt,openCnt,badWmCnt,groupCnt,actionErr,detail,detailErr,detailKey,
+            login,logout,createSlice,evaluate,doRelease,declareGroup,openDetail,tagClass};
   },
   template:`
   <div v-if="!token" class="login">
@@ -101,7 +146,7 @@ createApp({
   </div>
   <div v-if="token">
     <div class="top">
-      <div class="brand">日切放行<small>切片 → 完整度 → 放行 → 水位</small></div>
+      <div class="brand">日切放行<small>切片 → 完整度 → 依赖闸 → 放行 → 水位</small></div>
       <div class="tabs"><button v-for="(n,i) in nav" :key="n" :class="{on:tab===i}" @click="tab=i">{{n}}</button></div>
       <div class="user">{{user}}</div><button class="ghost" @click="logout">退出</button>
     </div>
@@ -110,16 +155,29 @@ createApp({
         <div class="panel">切片总数<b class="mono">{{slices.length}}</b></div>
         <div class="panel">已完整<b class="mono">{{completeCnt}}</b></div>
         <div class="panel">未放行<b class="mono">{{openCnt}}</b></div>
+        <div class="panel">依赖组 / 越界水位<b class="mono">{{groupCnt}} / <span :class="{'' : badWmCnt===0}">{{badWmCnt}}</span></b></div>
       </div>
+
       <div v-show="tab===0" class="grid">
         <div class="panel">
           <h2>在途切片</h2>
-          <table><thead><tr><th>切片号</th><th>日/区</th><th>实收</th><th>完整度</th><th></th></tr></thead>
+          <table><thead><tr><th>切片号</th><th>日/区</th><th>实收</th><th>完整度</th><th>依赖旁注</th><th></th></tr></thead>
           <tbody><tr v-for="s in slices" :key="s.id">
             <td class="mono">{{s.slice_no}}</td><td>{{s.biz_date}} / {{s.partition_key}}</td>
             <td class="mono">{{s.row_count}}/{{s.expected_count}}</td>
             <td><span class="tag" :class="{bad:s.completeness!=='完整'}">{{s.completeness}}</span></td>
-            <td><button class="ghost" @click="evaluate(s.id)">重裁</button></td>
+            <td>
+              <template v-if="s.dependency">
+                <div><span class="tag" :class="tagClass(s.dependency.status)">{{s.dependency.status}}</span>
+                <span class="hint"> · {{s.dependency.group_key}} · {{s.dependency.rubric}}口径</span></div>
+                <div class="hint">{{s.dependency.hint}}</div>
+              </template>
+              <span v-else class="hint">无依赖声明</span>
+            </td>
+            <td>
+              <button class="ghost" @click="evaluate(s.id)">重裁</button>
+              <button class="ghost" @click="openDetail(s.biz_date,s.partition_key)">详情</button>
+            </td>
           </tr></tbody></table>
         </div>
         <div class="panel">
@@ -131,14 +189,17 @@ createApp({
           <div class="err">{{actionErr}}</div>
         </div>
       </div>
+
       <div v-show="tab===1" class="panel">
         <h2>完整度裁决</h2>
-        <table><thead><tr><th>切片</th><th>缺口</th><th>结论</th><th>放行态</th></tr></thead>
+        <table><thead><tr><th>切片</th><th>缺口</th><th>结论</th><th>放行态</th><th>依赖闸结论</th></tr></thead>
         <tbody><tr v-for="s in slices" :key="'c'+s.id">
           <td class="mono">{{s.slice_no}}</td><td class="mono">{{Math.max(s.expected_count-s.row_count,0)}}</td>
           <td>{{s.completeness}}</td><td>{{s.release_status}}</td>
+          <td><template v-if="s.dependency"><span class="tag" :class="tagClass(s.dependency.status)">{{s.dependency.status}}</span> <span class="hint">{{s.dependency.group_key}}</span></template><span v-else class="hint">—</span></td>
         </tr></tbody></table>
       </div>
+
       <div v-show="tab===2" class="grid">
         <div class="panel">
           <h2>申请放行</h2>
@@ -146,6 +207,7 @@ createApp({
           <label>下游</label><input v-model="consumer"/>
           <button class="primary" @click="doRelease">放行</button>
           <div class="err">{{actionErr}}</div>
+          <p class="note">组成员按依赖闸口径裁决：乙口径下分区可独立放行，但组内未全员完整且全部成功放行前，水位一律不推进。</p>
         </div>
         <div class="panel">
           <h2>放行流水</h2>
@@ -153,10 +215,108 @@ createApp({
           <tbody><tr v-for="r in releases" :key="r.id"><td class="mono">{{r.slice_no}}</td><td>{{r.consumer}}</td><td>{{r.status}}</td><td class="mono">{{r.created_at}}</td></tr></tbody></table>
         </div>
       </div>
-      <div v-show="tab===3" class="panel">
+
+      <div v-show="tab===3" class="grid">
+        <div class="panel">
+          <h2>依赖目录</h2>
+          <div class="gate">
+            <span class="pill">闸口册口径 <b>{{register.canonical_rubric || '未钉死'}}</b></span>
+          </div>
+          <div v-for="g in groups" :key="g.id" style="margin-bottom:14px">
+            <div class="gate">
+              <span class="pill">依赖组 <b>{{g.group_key}}</b></span>
+              <span class="pill">业务日 <b class="mono">{{g.biz_date}}</b></span>
+              <span class="tag" :class="tagClass(g.status)">{{g.status}}</span>
+            </div>
+            <div class="hint">{{g.hint}}</div>
+            <table style="margin-top:8px"><thead><tr><th>分区</th><th>当前切片</th><th>实收</th><th>完整度</th><th>放行态</th></tr></thead>
+            <tbody><tr v-for="m in g.members" :key="m.partition_key">
+              <td class="mono">{{m.partition_key}}</td><td class="mono">{{m.slice_no||'未登记'}}</td>
+              <td class="mono">{{m.row_count===null?'—':m.row_count+'/'+m.expected_count}}</td>
+              <td><span class="tag" :class="{bad:m.completeness!=='完整'}">{{m.completeness}}</span></td>
+              <td>{{m.release_status}}</td>
+            </tr></tbody></table>
+            <table style="margin-top:8px"><thead><tr><th>下游</th><th>已放行分区</th><th>水位</th><th>闸裁决</th></tr></thead>
+            <tbody><tr v-for="cs in g.consumers" :key="cs.consumer">
+              <td>{{cs.consumer}}</td><td class="mono">{{cs.released_partitions.join(' / ')||'—'}}</td>
+              <td class="mono">{{cs.watermark?cs.watermark.watermark:'未推进'}}</td>
+              <td><span class="tag" :class="cs.watermark_ok?'':'bad'">{{cs.watermark_ok?'合规':(cs.watermark_pushed?'越界':'未推进')}}</span>
+                <div class="hint">{{cs.watermark_note}}</div></td>
+            </tr></tbody></table>
+          </div>
+          <div v-if="!groups.length" class="hint">尚无依赖组声明。</div>
+        </div>
+        <div class="panel">
+          <h2>声明依赖组</h2>
+          <label>业务日</label><input v-model="groupForm.biz_date"/>
+          <label>组名</label><input v-model="groupForm.group_key"/>
+          <label>分区（逗号分隔）</label><input v-model="groupForm.partitions"/>
+          <button class="primary" @click="declareGroup">写入依赖声明</button>
+          <div class="err">{{actionErr}}</div>
+          <p class="note">声明即按当天已钉死口径裁决；同一分区不得跨组重复声明，否则记“依赖口径偏了”。</p>
+        </div>
+      </div>
+
+      <div v-show="tab===4" class="panel">
+        <h2>分区详情</h2>
+        <div class="gate">
+          <span class="pill">业务日 <b class="mono">{{detailKey.split('/')[0]||'—'}}</b></span>
+          <span class="pill">分区 <b class="mono">{{detailKey.split('/')[1]||'—'}}</b></span>
+          <span class="pill" v-if="detail">口径 <b>{{detail.rubric}}</b></span>
+        </div>
+        <div class="err">{{detailErr}}</div>
+        <div v-if="detail">
+          <div class="gate" v-if="detail.group">
+            <span class="pill">依赖组 <b>{{detail.group.group_key}}</b></span>
+            <span class="tag" :class="tagClass(detail.group.status)">{{detail.group.status}}</span>
+            <span class="hint">{{detail.gate_hint}}</span>
+          </div>
+          <div v-else class="hint">{{detail.gate_hint}}</div>
+          <h3>当前生效切片</h3>
+          <table v-if="detail.active_slice"><thead><tr><th>切片号</th><th>实收</th><th>完整度</th><th>放行态</th></tr></thead>
+            <tbody><tr><td class="mono">{{detail.active_slice.slice_no}}</td><td class="mono">{{detail.active_slice.row_count}}/{{detail.active_slice.expected_count}}</td>
+            <td>{{detail.active_slice.completeness}}</td><td>{{detail.active_slice.release_status}}</td></tr></tbody></table>
+          <div v-else class="hint">该分区尚未登记切片。</div>
+          <h3>依赖组水位核验</h3>
+          <table><thead><tr><th>下游</th><th>水位</th><th>闸裁决</th><th>说明</th></tr></thead>
+          <tbody><tr v-for="w in detail.watermarks" :key="w.consumer">
+            <td>{{w.consumer}}</td><td class="mono">{{w.watermark?w.watermark.watermark:'未推进'}}</td>
+            <td><span class="tag" :class="w.watermark_ok?'':'bad'">{{w.watermark_ok?'合规':'越界'}}</span></td>
+            <td class="hint">{{w.watermark_note}}</td>
+          </tr></tbody></table>
+          <h3>依赖审计</h3>
+          <div class="events"><table><thead><tr><th>类别</th><th>值班</th><th>详情</th><th>时间</th></tr></thead>
+            <tbody><tr v-for="e in detail.events" :key="e.id"><td>{{e.kind}}</td><td>{{e.actor}}</td><td class="hint">{{e.detail}}</td><td class="mono">{{e.created_at}}</td></tr></tbody></table></div>
+        </div>
+      </div>
+
+      <div v-show="tab===5" class="panel">
         <h2>消费水位</h2>
-        <table><thead><tr><th>消费方</th><th>业务日</th><th>水位</th><th>来源切片</th></tr></thead>
-        <tbody><tr v-for="w in watermarks" :key="w.id"><td>{{w.consumer}}</td><td>{{w.biz_date}}</td><td class="mono">{{w.watermark}}</td><td class="mono">{{w.source_slice}}</td></tr></tbody></table>
+        <table><thead><tr><th>消费方</th><th>业务日</th><th>水位</th><th>来源切片</th><th>依赖组</th><th>闸裁决</th></tr></thead>
+        <tbody><tr v-for="w in watermarks" :key="w.id">
+          <td>{{w.consumer}}</td><td>{{w.biz_date}}</td><td class="mono">{{w.watermark}}</td><td class="mono">{{w.source_slice}}</td>
+          <td><span v-if="w.resolved_group_id">{{w.group_key}} <span class="tag" :class="tagClass(w.group_status)">{{w.group_status}}</span><span v-if="w.legacy" class="tag" :class="w.superseded?'mute':'bad'">{{w.superseded?'闸前·已纠正':'闸前·越界'}}</span></span><span v-else class="hint">无依赖</span></td>
+          <td><span class="tag" :class="w.gate_ok?'':'bad'">{{w.superseded?'已纠正':(w.gate_ok?'合规':'越界')}}</span><div class="hint">{{w.gate_note}}</div></td>
+        </tr></tbody></table>
+      </div>
+
+      <div v-show="tab===6" class="grid">
+        <div class="panel">
+          <h2>依赖闸口册 · 口径</h2>
+          <table><thead><tr><th>业务日</th><th>口径</th><th>写法</th><th>钉死人</th><th>时间</th></tr></thead>
+          <tbody><tr v-for="p in register.policies" :key="p.id">
+            <td class="mono">{{p.biz_date}}</td><td>{{p.rubric}}</td><td class="hint">{{p.rubric_spec}}</td>
+            <td>{{p.pinned_by}}</td><td class="mono">{{p.pinned_at}}</td></tr></tbody></table>
+          <p class="note">同一业务日只钉一种口径，当天不得更换。甲写法（整组禁止/整组放行）与乙写法（分区独立、组齐后水位一次推进）互斥，本库统一采用乙。</p>
+        </div>
+        <div class="panel">
+          <h2>依赖闸口册 · 流水</h2>
+          <div class="events"><table><thead><tr><th>类别</th><th>业务日</th><th>值班</th><th>详情</th><th>时间</th></tr></thead>
+          <tbody><tr v-for="e in register.events" :key="e.id">
+            <td><span :class="{'bad-text':e.kind==='依赖口径偏了'||e.kind==='依赖争用'}">{{e.kind}}</span></td>
+            <td class="mono">{{e.biz_date}}</td><td>{{e.actor}}</td><td class="hint">{{e.detail}}</td><td class="mono">{{e.created_at}}</td>
+          </tr></tbody></table></div>
+        </div>
       </div>
     </main>
   </div>`
